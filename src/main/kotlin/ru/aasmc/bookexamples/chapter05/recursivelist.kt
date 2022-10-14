@@ -1,7 +1,5 @@
 package ru.aasmc.bookexamples.chapter05
 
-import java.time.Duration
-
 sealed class List<out A> {
 
     abstract fun isEmpty(): Boolean
