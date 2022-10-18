@@ -100,6 +100,83 @@ sealed class List<out A> {
             }
         }
 
+    fun <A1, A2> unzip(f: (A) -> Pair<A1, A2>): Pair<List<A1>, List<A2>> =
+        this.coFoldRight(Pair(Nil, Nil)) { elem ->
+            { pair: Pair<List<A1>, List<A2>> ->
+                f(elem).let {
+                    Pair(pair.first.cons(it.first), pair.second.cons(it.second))
+                }
+            }
+        }
+
+    fun getAt(index: Int): Result<A> {
+        tailrec fun getAt_(list: List<A>, index: Int): Result<A> = when (list) {
+            Nil -> Result.failure<A>("Dead code. Should never execute")
+            is Cons -> {
+                if (index == 0) {
+                    Result(list.head)
+                } else {
+                    getAt_(list.tail, index - 1)
+                }
+            }
+        }
+        return if (index < 0 || index > length) {
+            Result.failure("Index out of bounds")
+        } else {
+            getAt_(this, index)
+        }
+    }
+
+    fun getAtViaFoldLeft(index: Int): Result<A> =
+        Pair(Result.failure<A>("Index out of bounds"), index).let {
+            if (index < 0 || index >= length) {
+                it
+            } else {
+                foldLeft(it) { ta ->
+                    { a ->
+                        if (ta.second < 0) {
+                            ta
+                        } else {
+                            Pair(Result(a), ta.second - 1)
+                        }
+                    }
+                }
+            }
+        }.first
+
+    fun getAtViaFoldLeftTerminating(index: Int): Result<A> {
+        data class Pair<out A>(val first: Result<A>, val second: Int) {
+            override fun equals(other: Any?): Boolean = when {
+                other == null -> false
+                other.javaClass == this.javaClass ->
+                    (other as Pair<A>).second == second
+                else -> false
+            }
+
+            override fun hashCode(): Int {
+                return first.hashCode() + second.hashCode();
+            }
+        }
+        return Pair<A>(Result.failure("Index out of bounds"), index).let { identity ->
+            Pair<A>(Result.failure("Index out of bounds"), -1).let { zero ->
+                if (index < 0 || index >= length) {
+                    identity
+                } else {
+                    foldLeftTerminating(identity, zero) { ta: Pair<A> ->
+                        {a: A ->
+                            if (ta.second < 0) {
+                                ta
+                            } else {
+                                Pair(Result(a), ta.second - 1)
+                            }
+                        }
+                    }
+                }
+            }
+        }.first
+    }
+
+    abstract fun <B> foldLeftTerminating(identity: B, zero: B, f: (B) -> (A) -> B): B
 
     internal object Nil : List<Nothing>() {
 
@@ -114,6 +191,9 @@ sealed class List<out A> {
         }
 
         override fun headSafe(): Result<Nothing> = Result()
+
+        override fun <B> foldLeftTerminating(identity: B, zero: B, f: (B) -> (Nothing) -> B): B =
+            identity
     }
 
     internal class Cons<out A>(
@@ -136,6 +216,18 @@ sealed class List<out A> {
             }
 
         override fun headSafe(): Result<A> = Result(head)
+
+        override fun <B> foldLeftTerminating(identity: B, zero: B, f: (B) -> (A) -> B): B {
+            fun foldLeftTerminating_(acc: B, zero: B, list: List<A>, f: (B) -> (A) -> B): B = when (list) {
+                Nil -> acc
+                is Cons -> if (acc == zero) {
+                    acc
+                } else {
+                    foldLeftTerminating_(f(acc)(list.head), zero, list.tail, f)
+                }
+            }
+            return foldLeftTerminating_(identity, zero, this, f)
+        }
     }
 
     companion object {
@@ -356,11 +448,7 @@ fun <A, B, C> product(
 }
 
 fun <A, B> unzip(list: List<Pair<A, B>>): Pair<List<A>, List<B>> =
-    list.coFoldRight(Pair(List(), List())) { pair ->
-        { acc ->
-            Pair(acc.first.cons(pair.first), acc.second.cons(pair.second))
-        }
-    }
+    list.unzip { it }
 
 fun main() {
     val pairs = product(List(1, 2), List(4, 5, 6)) { x -> { y -> Pair(x, y) } }
