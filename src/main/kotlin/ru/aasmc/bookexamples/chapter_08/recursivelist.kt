@@ -3,6 +3,9 @@ package ru.aasmc.bookexamples.chapter_08
 import ru.aasmc.bookexamples.chapter_06.Option
 import ru.aasmc.bookexamples.chapter_07.Result
 import ru.aasmc.bookexamples.chapter_07.map2
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.ExecutorService
+import kotlin.RuntimeException
 
 sealed class List<out A> {
 
@@ -326,6 +329,101 @@ sealed class List<out A> {
      */
     fun forAll(p: (A) -> Boolean): Boolean =
         foldLeftAndReturnRemaining(true, false) { x -> { elem -> x && p(elem) } }.first
+
+    fun <B> parallelFoldLeft(
+        es: ExecutorService,
+        identity: B,
+        f: (B) -> (A) -> B,
+        m: (B) -> (B) -> B
+    ): Result<B> = try {
+        // divide current list into 1024 sublists
+        val result: List<B> = divide(1024).map { list: List<A> -> // for each sublist
+            // submit a task to the executor service
+            // the task is to fold the sublist with the given identity and computing function
+            es.submit<B> { list.foldLeft(identity, f) }
+        }.map<B> { fb -> // for each resulting Future object returned from the Executor service
+            try {
+                fb.get() // try to get the computational result
+            } catch (e: InterruptedException) {
+                throw RuntimeException(e)
+            } catch (e: ExecutionException) {
+                throw RuntimeException(e)
+            }
+        }
+        // fold the resulting list and return Success
+        Result(result.foldLeft(identity, m))
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    /**
+     * Divides this list into a number of sublists. The list is divided in two
+     * and each sublist recursively is divided in two, with the depth parameter
+     * representing the number of recursive steps.
+     */
+    fun divide(depth: Int): List<List<A>> {
+        tailrec fun helper(list: List<List<A>>, depth: Int): List<List<A>> =
+            when (list) {
+                Nil -> list // dead code
+                is Cons -> {
+                    if (list.head.length < 2 || depth < 1) {
+                        list
+                    } else {
+                        helper(list.flatMap { x -> x.splitListAt(x.length / 2) }, depth - 1)
+                    }
+                }
+            }
+        return if (this.isEmpty()) {
+            List(this)
+        } else {
+            helper(List(this), depth)
+        }
+    }
+
+    /**
+     * Splists the current list into sublists at the given index
+     * and returns the list of sublists.
+     */
+    fun splitListAt(index: Int): List<List<A>> {
+        tailrec fun helper(acc: List<A>, list: List<A>, i: Int): List<List<A>> =
+            when (list) {
+                Nil -> List(list.reverse(), acc)
+                is Cons -> {
+                    if (i == 0) {
+                        List(list.reverse(), acc)
+                    } else {
+                        helper(acc.cons(list.head), list.tail, i - 1)
+                    }
+                }
+            }
+        return when {
+            index < 0 -> splitListAt(0)
+            index > length -> splitListAt(length)
+            else -> {
+                helper(Nil, this.reverse(), this.length - index)
+            }
+        }
+    }
+
+    fun <B> parallelMap(es: ExecutorService, g: (A) -> B): Result<List<B>> =
+        try {
+            val result = this.map { elem -> // for each element in the list
+                // submit to executor service a lambda that will map current element to B
+                es.submit<B> { g(elem) }
+            }.map<B> { future -> // for each resulting Future
+                try {
+                    // try to get the result
+                    future.get()
+                } catch (e: InterruptedException) {
+                    throw RuntimeException(e)
+                } catch (e: ExecutionException) {
+                    throw RuntimeException(e)
+                }
+            }
+            Result(result)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
 
     internal object Nil : List<Nothing>() {
 
