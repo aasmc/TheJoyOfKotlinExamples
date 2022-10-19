@@ -1,5 +1,6 @@
 package ru.aasmc.bookexamples.chapter_08
 
+import ru.aasmc.bookexamples.chapter_06.Option
 import ru.aasmc.bookexamples.chapter_07.Result
 import ru.aasmc.bookexamples.chapter_07.map2
 
@@ -163,7 +164,7 @@ sealed class List<out A> {
                     identity
                 } else {
                     foldLeftTerminating(identity, zero) { ta: Pair<A> ->
-                        {a: A ->
+                        { a: A ->
                             if (ta.second < 0) {
                                 ta
                             } else {
@@ -177,6 +178,154 @@ sealed class List<out A> {
     }
 
     abstract fun <B> foldLeftTerminating(identity: B, zero: B, f: (B) -> (A) -> B): B
+
+    /**
+     * Returns two lists by splitting current list at position [index].
+     * Index below 0 is treated as 0, index above list.length is treated as the max value for the index.
+     */
+    fun splitAt(index: Int): Pair<List<A>, List<A>> {
+        tailrec fun splitAt(acc: List<A>, list: List<A>, i: Int): Pair<List<A>, List<A>> =
+            when (list) {
+                Nil -> Pair(list.reverse(), acc)
+                is Cons -> if (i == 0) {
+                    Pair(list.reverse(), acc)
+                } else {
+                    splitAt(acc.cons(list.head), list.tail, i - 1)
+                }
+            }
+
+        return when {
+            index < 0 -> splitAt(0)
+            index > length -> splitAt(length)
+            else -> splitAt(Nil, this.reverse(), this.length - index)
+        }
+    }
+
+    fun splitAtViaFoldLeft(index: Int): Pair<List<A>, List<A>> {
+        val idx = if (index < 0) {
+            0
+        } else if (index >= length) {
+            length
+        } else {
+            index
+        }
+        // Holder that stores info about left list, right list and current index
+        val identity = Triple(Nil, Nil, idx)
+        val result = foldLeft(identity) { triple: Triple<List<A>, List<A>, Int> -> // accumulator
+            { elem -> // for each element in the list
+                if (triple.third == 0) { // if reached the end of the first list, begin forming the second list
+                    Triple(triple.first, triple.second.cons(elem), triple.third)
+                } else {
+                    // if not reached the end of the first list, then add current element to the first list
+                    Triple(triple.first.cons(elem), triple.second, triple.third - 1)
+                }
+            }
+        }
+        // since we can add only at the head of the list, then we need to reverse both lists
+        // this function is not ideal in terms of time complexity
+        return Pair(result.first.reverse(), result.second.reverse())
+    }
+
+    abstract fun <B> foldLeftAndReturnRemaining(identity: B, zero: B, f: (B) -> (A) -> B): Pair<B, List<A>>
+
+    fun splitAtViaFoldLeftAndReturnRemaining(index: Int): Pair<List<A>, List<A>> {
+        data class Holder<out A>(val first: List<A>, val second: Int) {
+            // explicitly make equals compare only indices (second values in the holder)
+            override fun equals(other: Any?): Boolean = when {
+                other == null -> false
+                other.javaClass == this.javaClass -> (other as Holder<A>).second == second
+                else -> false
+            }
+
+            override fun hashCode(): Int = first.hashCode() + second.hashCode()
+        }
+
+        return when {
+            index <= 0 -> Pair(Nil, this)
+            index >= length -> Pair(this, Nil)
+            else -> {
+                val identity = Holder(Nil as List<A>, -1)
+                val zero = Holder(this, index)
+                val (holder, list) = this.foldLeftAndReturnRemaining(identity, zero) { acc ->
+                    { elem ->
+                        Holder(acc.first.cons(elem), acc.second + 1)
+                    }
+                }
+                Pair(holder.first.reverse(), list)
+            }
+        }
+    }
+
+    fun hasSubList(sub: List<@UnsafeVariance A>): Boolean {
+        tailrec fun helper(list: List<A>, sub: List<A>): Boolean =
+            when (list) {
+                Nil -> sub.isEmpty()
+                is Cons -> {
+                    if (list.startsWith(sub)) {
+                        true
+                    } else {
+                        helper(list.tail, sub)
+                    }
+                }
+            }
+        return helper(this, sub)
+    }
+
+    /**
+     * Checks whether this list starts with a given sub list. If the sub list
+     * is an empty list (Nil) it will return true.
+     */
+    fun startsWith(sub: List<@UnsafeVariance A>): Boolean {
+        tailrec fun helper(list: List<A>, sub: List<A>): Boolean =
+            when (sub) {
+                Nil -> true
+                is Cons -> {
+                    when (list) {
+                        Nil -> false
+                        is Cons -> {
+                            if (list.head == sub.head) {
+                                helper(list.tail, sub.tail)
+                            } else {
+                                false
+                            }
+                        }
+                    }
+                }
+            }
+        return helper(this, sub)
+    }
+
+    /**
+     * Returns a Map where keys are the results of applying [f] to
+     * each element of the list, and values are lists of elements corresponding to each key.
+     */
+    // to ensure that the order of elements is preserved in the sublists we need to
+    // reverse the current list
+    fun <B> groupBy(f: (A) -> B): Map<B, List<A>> =
+        reverse().foldLeft(mapOf()) { acc: Map<B, List<A>> ->
+            { elem ->
+                val key = f(elem)
+                acc + (key to (acc[key] ?: Nil).cons(elem))
+            }
+        }
+
+    /**
+     * Checks if at least one element in the list satisfies the condition
+     * represented by the predicate [p].
+     */
+    fun exists(p: (A) -> Boolean): Boolean =
+        foldLeftAndReturnRemaining(false, true) { x ->
+            { y: A ->
+                x || p(y)
+            }
+        }.first
+
+    /**
+     * Checks if all elements in the list satisfy the condition
+     * represented by the predicate [p].
+     */
+    fun forAll(p: (A) -> Boolean): Boolean =
+        foldLeftAndReturnRemaining(true, false) { x -> { elem -> x && p(elem) } }.first
 
     internal object Nil : List<Nothing>() {
 
@@ -194,6 +343,12 @@ sealed class List<out A> {
 
         override fun <B> foldLeftTerminating(identity: B, zero: B, f: (B) -> (Nothing) -> B): B =
             identity
+
+        override fun <B> foldLeftAndReturnRemaining(
+            identity: B,
+            zero: B,
+            f: (B) -> (Nothing) -> B
+        ): Pair<B, List<Nothing>> = Pair(identity, Nil)
     }
 
     internal class Cons<out A>(
@@ -227,6 +382,23 @@ sealed class List<out A> {
                 }
             }
             return foldLeftTerminating_(identity, zero, this, f)
+        }
+
+        override fun <B> foldLeftAndReturnRemaining(
+            identity: B,
+            zero: B,
+            f: (B) -> (A) -> B
+        ): Pair<B, List<A>> {
+            fun <B> helper(acc: B, zero: B, list: List<A>, f: (B) -> (A) -> B): Pair<B, List<A>> =
+                when (list) {
+                    Nil -> Pair(acc, list)
+                    is Cons -> if (acc == zero) {
+                        Pair(acc, list)
+                    } else {
+                        helper(f(acc)(list.head), zero, list.tail, f)
+                    }
+                }
+            return helper(identity, zero, this, f)
         }
     }
 
@@ -450,11 +622,53 @@ fun <A, B, C> product(
 fun <A, B> unzip(list: List<Pair<A, B>>): Pair<List<A>, List<B>> =
     list.unzip { it }
 
+/**
+ * Non stack-safe function that accepts a mapper from [S] to [Option<Pair<A, S>>]
+ * and produces a List<A> by successively applying f to the S value as long as the result
+ * is Option.Some.
+ */
+fun <A, S> unfoldUnsafe(start: S, f: (S) -> Option<Pair<A, S>>): List<A> =
+    f(start).map { x ->
+        unfoldUnsafe(x.second, f).cons(x.first)
+    }.getOrElse { List.Nil }
+
+fun <A, S> unfoldCorecursive(start: S, getNext: (S) -> Option<Pair<A, S>>): List<A> {
+    tailrec fun helper(acc: List<A>, s: S): List<A> {
+        val next = getNext(s)
+        return when (next) {
+            Option.None -> acc
+            is Option.Some -> {
+                helper(acc.cons(next.value.first), next.value.second)
+            }
+        }
+    }
+    return helper(List.Nil, start).reverse()
+}
+
+fun range(start: Int, endExclusive: Int): List<Int> {
+    return unfoldCorecursive(start) { i ->
+        if (i < endExclusive) {
+            Option(Pair(i, i + 1))
+        } else {
+            Option()
+        }
+    }
+}
+
+
 fun main() {
     val pairs = product(List(1, 2), List(4, 5, 6)) { x -> { y -> Pair(x, y) } }
     val zipped = zipWith(List(1, 2), List(4, 5, 6)) { x -> { y -> Pair(x, y) } }
     println("Product: $pairs")
     println("ZipWith: $zipped")
+
+    println("****************************************")
+    println("Example of using unfold")
+    val f: (Int) -> Option<Pair<Int, Int>> = { num ->
+        if (num < 10_000) Option(Pair(num, num + 1)) else Option()
+    }
+    val result = unfoldCorecursive(0, f)
+    println(result)
 }
 
 
