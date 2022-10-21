@@ -164,6 +164,8 @@ sealed class Result<out A> : Serializable {
 
         fun <A> failure(exception: Exception): Result<A> =
             Failure(IllegalStateException(exception))
+
+        fun <A> empty(): Result<A> = Result.Empty
     }
 }
 
