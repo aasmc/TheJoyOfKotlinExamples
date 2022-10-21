@@ -94,6 +94,18 @@ sealed class Stream<out A> {
 
     fun find(p: (A) -> Boolean): Result<A> = filterViaFoldRight(p).head()
 
+    fun filterViaDropWhile(p: (A) -> Boolean): Stream<A> =
+        dropWhile { elem ->
+            !p(elem) // drop all initial elements of the current stream that don't match the condition
+        }.let { stream -> // check the result
+            when (stream) {
+                Empty -> stream // return if empty
+                // else create a new stream with current head, and drop all elements from the tail
+                // which don't satisfy the condition
+                is Cons -> cons(stream.hd, Lazy { stream.tl().filterViaDropWhile(p) })
+            }
+        }
+
     private object Empty : Stream<Nothing>() {
         override fun head(): Result<Nothing> = Result()
 
@@ -213,6 +225,22 @@ sealed class Stream<out A> {
                 else -> exists(stream.tl(), p)
             }
         }
+
+        /**
+         * Creates a [Stream] of [A] elements from state [z].
+         * Elements of the [Stream] are created by the function [f] from [S] to
+         * [Result] of [Pair] of [A] and [S].
+         * If the [Result] is a failure, then the [Stream]
+         * terminates.
+         */
+        fun <A, S> unfold(z: S, f: (S) -> Result<Pair<A, S>>): Stream<A> =
+            f(z).map { (a, s) ->
+                Stream.cons(Lazy { a }, Lazy { unfold(s, f) })
+            }.getOrElse(Stream.Empty)
+
+        fun fromViaUnfold(n: Int): Stream<Int> = unfold(n) { x ->
+            Result(Pair(x, x + 1))
+        }
     }
 }
 
@@ -257,10 +285,10 @@ fun fibs(): Stream<Int> = Stream.iterate(Pair(1, 1)) { (left, right) ->
 }.mapViaFoldRight { elem -> elem.first }
 
 
-
-
-
-
+fun fibsViaUnfold(): Stream<Int> =
+    Stream.unfold(Pair(1, 1)) { (left, right) ->
+        Result(Pair(left, Pair(right, left + right)))
+    }
 
 
 
