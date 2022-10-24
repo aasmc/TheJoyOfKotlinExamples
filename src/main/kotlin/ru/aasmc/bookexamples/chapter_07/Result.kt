@@ -21,6 +21,8 @@ sealed class Result<out A> : Serializable {
             onFailure: (RuntimeException) -> Unit,
             onEmpty: () -> Unit
         ) = onFailure(exception)
+
+        override fun mapEmpty(): Result<Any> = failure(this.exception)
     }
 
     internal class Success<out A>(
@@ -51,6 +53,8 @@ sealed class Result<out A> : Serializable {
             onFailure: (RuntimeException) -> Unit,
             onEmpty: () -> Unit
         ) = onSuccess(value)
+
+        override fun mapEmpty(): Result<Nothing> = failure("Not empty")
     }
 
     internal object Empty : Result<Nothing>() {
@@ -67,9 +71,17 @@ sealed class Result<out A> : Serializable {
             onFailure: (RuntimeException) -> Unit,
             onEmpty: () -> Unit
         ) = onEmpty()
+
+        override fun mapEmpty(): Result<Any> = Result(Any())
     }
 
     abstract fun <B> map(f: (A) -> B): Result<B>
+
+    /**
+     * Returns Result.Success if this Result is empty,
+     * otherwise returns Result.Failure
+     */
+    abstract fun mapEmpty(): Result<Any>
 
     abstract fun <B> flatMap(f: (A) -> Result<B>): Result<B>
 

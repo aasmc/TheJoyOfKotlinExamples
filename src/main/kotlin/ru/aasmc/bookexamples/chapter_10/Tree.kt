@@ -81,6 +81,11 @@ sealed class Tree<out A : Comparable<@UnsafeVariance A>> {
 
     abstract fun max(): Result<A>
 
+    /**
+     * Removes an element [a] from the tree and returns a new
+     * tree without the element. If [a] is not present in the tree
+     * then returns the same tree unchanged.
+     */
     fun remove(a: @UnsafeVariance A): Tree<A> = when (this) {
         Empty -> this
         is T -> when {
@@ -112,6 +117,38 @@ sealed class Tree<out A : Comparable<@UnsafeVariance A>> {
         }
     }
 
+    abstract fun merge(other: Tree<@UnsafeVariance A>): Tree<A>
+
+    abstract fun <B> foldLeft(
+        identity: B,
+        f: (B) -> (A) -> B,
+        g: (B) -> (B) -> B
+    ): B
+
+    abstract fun <B> foldInOrder(identity: B, f: (B) -> (A) -> (B) -> B): B
+
+    abstract fun <B> foldPreOrder(identity: B, f: (A) -> (B) -> (B) -> B): B
+
+    abstract fun <B> foldPostOrder(identity: B, f: (B) -> (B) -> (A) -> B): B
+
+    fun <B : Comparable<B>> map(f: (A) -> B): Tree<B> =
+        foldInOrder(Empty) { t1: Tree<B> ->
+            { i: A ->
+                { t2: Tree<B> ->
+                    Tree(t1, f(i), t2)
+                }
+            }
+        }
+
+    protected abstract fun rotateRight(): Tree<A>
+
+    protected abstract fun rotateLeft(): Tree<A>
+
+    /**
+     * Converts this tree into an in-order list from right to left.
+     */
+    fun toListInOrderRight(): List<A> = unBalanceRight(List(), this)
+
     internal object Empty : Tree<Nothing>() {
 
         override fun isEmpty(): Boolean = true
@@ -125,6 +162,20 @@ sealed class Tree<out A : Comparable<@UnsafeVariance A>> {
         override fun min(): Result<Nothing> = Result.empty()
 
         override fun max(): Result<Nothing> = Result.empty()
+
+        override fun merge(other: Tree<Nothing>): Tree<Nothing> = other
+
+        override fun <B> foldLeft(identity: B, f: (B) -> (Nothing) -> B, g: (B) -> (B) -> B): B = identity
+
+        override fun <B> foldInOrder(identity: B, f: (B) -> (Nothing) -> (B) -> B): B = identity
+
+        override fun <B> foldPreOrder(identity: B, f: (Nothing) -> (B) -> (B) -> B): B = identity
+
+        override fun <B> foldPostOrder(identity: B, f: (B) -> (B) -> (Nothing) -> B): B = identity
+
+        override fun rotateRight(): Tree<Nothing> = this
+
+        override fun rotateLeft(): Tree<Nothing> = this
     }
 
     internal class T<out A : Comparable<@UnsafeVariance A>>(
@@ -143,23 +194,219 @@ sealed class Tree<out A : Comparable<@UnsafeVariance A>> {
         override fun min(): Result<A> = left.min().orElse { Result(value) }
 
         override fun max(): Result<A> = right.max().orElse { Result(value) }
+
+        /**
+         * Merges this tree (the tree in which the function is defined)
+         * with the [other] tree according to the following algorithm:
+         *  - if the parameter tree is empty, return this
+         *  - if the root of the parameter is higher than this root,
+         *    remove the left branch of the parameter tree and merge
+         *    the result with this right branch. Then merge the result
+         *    with the parameter's left branch.
+         *  - if the root of the parameter is lower than this root, remove
+         *    the right branch of the parameter tree and merge the result with
+         *    this left branch. Then merge the result with the parameter's
+         *    right branch.
+         *  - if the root of the parameter is equal to this root, merge the
+         *    left branch of the parameter with this left branch and merge
+         *    the right branch of the parameter with this right branch.
+         *
+         *  This implementation doesn't change this root's value, if it is equal
+         *  to the other's root value.
+         *
+         *  No balancing of the resulting tree occurs.
+         */
+        override fun merge(other: Tree<@UnsafeVariance A>): Tree<A> = when (other) {
+            Empty -> this
+            is T -> when {
+                other.value > this.value -> T(
+                    left = left,
+                    value = value,
+                    right = right.merge( // merge with this right tree
+                        T(
+                            left = Empty, // remove the left branch of the other tree
+                            value = other.value,
+                            right = other.right
+                        )
+                    )
+                ).merge(other.left) // merge with the other's left tree
+                other.value < this.value -> T(
+                    left = left.merge(
+                        T(
+                            left = other.left,
+                            value = other.value,
+                            right = Empty
+                        )
+                    ),
+                    value = value,
+                    right = right
+                ).merge(other.right)
+                else -> T(
+                    left = left.merge(other.left),
+                    value = value,
+                    right = right.merge(other.right)
+                )
+            }
+        }
+
+        /**
+         * Folds this list and returns the result of folding which is of type [B].
+         * To fold we use two functions:
+         *  - [f] which is the folding function for left and right branches
+         *  - [g] which is used to merge the result of folding with the root
+         *
+         * The algorithm:
+         *  - recursively fold the left branch and the right branch, giving two [B] values
+         *  - combine these two [B] values with the [g] function, and then combine the result with the root
+         *    and return the result.
+         *
+         * This function doesn't give a client a predictable result, because there are
+         * many traversal orders and the client doesn't know which one is used here.
+         */
+        override fun <B> foldLeft(
+            identity: B,
+            f: (B) -> (A) -> B,
+            g: (B) -> (B) -> B
+        ): B = g(
+            right.foldLeft(identity, f, g)
+        )(
+            f(left.foldLeft(identity, f, g))(this.value)
+        )
+
+        override fun <B> foldInOrder(identity: B, f: (B) -> (A) -> (B) -> B): B =
+            f(left.foldInOrder(identity, f))(value)(right.foldInOrder(identity, f))
+
+        override fun <B> foldPreOrder(identity: B, f: (A) -> (B) -> (B) -> B): B =
+            f(value)(left.foldPreOrder(identity, f))(right.foldPreOrder(identity, f))
+
+        override fun <B> foldPostOrder(identity: B, f: (B) -> (B) -> (A) -> B): B =
+            f(left.foldPostOrder(identity, f))(right.foldPostOrder(identity, f))(value)
+
+        /**
+         * Algorithm for right rotation:
+         * - test the left branch for emptyness
+         * - if the left branch is empty, return this because rotating right consists
+         *   in promoting the left element to root.
+         * - if the left element is not empty, it becomes the root, so a new T is
+         *   created with left.value as the root. The left branch of the left element
+         *   becomes the left branch of the new tree. For the right branch, construct a new tree with
+         *   the original root as the root, the right branch of the original left as the left
+         *   branch, and the original right as the right branch.
+         */
+        override fun rotateRight(): Tree<A> = when (left) {
+            Empty -> this
+            is T -> T(
+                left = left.left,
+                value = left.value, // new root of the tree
+                right = T(
+                    left = left.right, // right value of the previous left branch
+                    value = value, // old root
+                    right = right // current right
+                )
+            )
+        }
+
+        /**
+         * Symmetrical to right rotation.
+         */
+        override fun rotateLeft(): Tree<A> = when (right) {
+            Empty -> this
+            is T -> T(
+                left = T(
+                    left = left, // current left
+                    value = value, // current root
+                    right = right.left // left value of the right tree
+                ),
+                value = right.value, // new root
+                right = right.right,
+            )
+        }
+
     }
 
     companion object {
         operator fun <A : Comparable<A>> invoke(): Tree<A> = Empty
+
+        operator fun <A : Comparable<A>> invoke(vararg az: A): Tree<A> =
+            az.foldRight(Empty) { a: A, tree: Tree<A> -> tree.plus(a) }
+
+        operator fun <A : Comparable<A>> invoke(list: List<A>): Tree<A> =
+            list.foldLeft(Empty as Tree<A>) { tree: Tree<A> -> { a: A -> tree.plus(a) } }
+
+        fun <A : Comparable<A>> lt(first: A, second: A): Boolean = first < second
+
+        fun <A : Comparable<A>> lt(first: A, second: A, third: A): Boolean =
+            lt(first, second) && lt(second, third)
+
+        /**
+         * Checks whether the two given trees are ordered, i.e. max value of the left tree
+         * is lower than the root of the right tree and the min value of the right tree
+         * is higher than the root of the left tree.
+         */
+        fun <A : Comparable<A>> ordered(
+            left: Tree<A>,
+            a: A,
+            right: Tree<A>
+        ): Boolean =
+            (left.max().flatMap { lMax ->
+                right.min().map { rMin ->
+                    lt(lMax, a, rMin)
+                }
+            }.getOrElse(left.isEmpty() && right.isEmpty()) ||
+                    left.min().mapEmpty() // ensure left tree is empty
+                        .flatMap {
+                            right.min().map { rmin ->
+                                lt(a, rmin)
+                            }
+                        }.getOrElse(false) ||
+                    right.min()
+                        .mapEmpty() // ensure right tree is empty
+                        .flatMap {
+                            left.max().map { lMax ->
+                                lt(lMax, a)
+                            }
+                        }.getOrElse(false))
+
+        /**
+         * Combines two trees and a given root value and creates a new tree.
+         */
+        operator fun <A : Comparable<A>> invoke(
+            left: Tree<A>,
+            a: A,
+            right: Tree<A>
+        ): Tree<A> = when {
+            ordered(left, a, right) -> T(left, a, right)
+            ordered(right, a, left) -> T(right, a, left)
+            else -> Tree(a).merge(left).merge(right)
+        }
+
+        /**
+         * This function rotates the tree to the right until the left
+         * branch is empty. Then it calls itself recursively to do the same
+         * thing to all the right subtrees, after having added the tree value to
+         * accumulator list. Eventually the tree parameter is found empty and
+         * the function returns the list accumulator.
+         */
+        private tailrec fun <A : Comparable<A>> unBalanceRight(
+            acc: List<A>,
+            tree: Tree<A>
+        ): List<A> = when (tree) {
+            Empty -> acc
+            is T -> when (tree.left) {
+                // adds the tree to the accumulator list
+                Empty -> unBalanceRight(acc.cons(tree.value), tree.right)
+                // rotates the tree until the left branch is empty
+                is T -> unBalanceRight(acc, tree.rotateRight())
+            }
+        }
     }
 
 }
 
-
-
-
-
-
-
-
-
-
+fun log2nlz(n: Int): Int = when (n) {
+    0 -> 0
+    else -> 31 - Integer.numberOfLeadingZeros(n)
+}
 
 
 
